@@ -78,6 +78,44 @@ class ESMFeaturizer(Featurizer):
         return tokens.mean(0)
 
 
+class ESM2Featurizer(Featurizer):
+    def __init__(self, save_dir: Path = Path().absolute(), num_layers: int = 33):
+        self._esm_layer = num_layers
+        esm_shape = {
+            33: 1280,
+            30: 640
+        }[self._esm_layer]
+        super().__init__(f"ESM2-{num_layers}", shape=esm_shape, save_dir=save_dir)
+
+        import esm
+        torch.hub.set_dir(MODEL_CACHE_DIR)
+        self._max_len = 1024
+
+        esm_model_func = {
+            33: esm.pretrained.esm2_t33_650M_UR50D,
+            30: esm.pretrained.esm2_t30_150M_UR50D,
+        }
+        self._esm_model, self._esm_alphabet = esm_model_func[self._esm_layer]()
+        self._esm_batch_converter = self._esm_alphabet.get_batch_converter()
+        self._register_cuda("model", self._esm_model)
+    
+    def _transform(self, seq: str):
+        seq = seq.upper()
+        if len(seq) > self._max_len - 2:
+            seq = seq[: self._max_len - 2]
+        
+        _, _, batch_tokens = self._esm_batch_converter([('sequence', seq)])
+        batch_tokens = batch_tokens.to(self.device)
+        results = self._cuda_registry['model'][0](
+            batch_tokens, repr_layers=[self._esm_layer], return_contacts=False
+        )
+        token_reps = results['representations'][self._esm_layer]
+
+        # generate a per-sequence representation via averaging
+        tokens = token_reps[0, 1:len(seq)+1]
+        return tokens.mean(0)
+
+
 # class ProseFeaturizer(Featurizer):
 #     def __init__(self, save_dir: Path = Path().absolute(), per_tok=False):
 #         super().__init__("Prose", 6165, save_dir)
